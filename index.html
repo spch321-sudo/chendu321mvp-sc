@@ -3081,69 +3081,100 @@ function yunPlayJoined(text, id, startIdx){
   var chunks=yunChunks(spkSanitize(text));
   if(!chunks.length){ yunStop(); return; }
   var start=(startIdx>0 && startIdx<chunks.length)?startIdx:0;
+  var slice=chunks.slice(start);
   spk.curId=id||""; spk.curText=text||""; spk.queue=chunks; spk.idx=start+1;
   spk.active=true; spk.paused=false; spk.mode="yun"; spk.joined=true;
   var my=++spk.token;
   if(typeof spkMediaSession==="function") spkMediaSession("play");
-  if(typeof updateSpeakButtons==="function") updateSpeakButtons();   /* 立刻浮出停止列＋存離線膠囊 */
+  if(typeof updateSpeakButtons==="function") updateSpeakButtons();
   if(typeof uiToast==="function") uiToast("开始朗读…");
   persistSpkResume();
 
   var a=yunGetAudio();
-  var PREFETCH=4;                 /* 邊念邊預抓後面 4 段，段間無縫 */
-  var jobs={};                    /* i -> Promise<Blob> */
-  var urls={};                    /* i -> objectURL（播完即回收） */
+  var full=null;           /* 整首 Blob */
+  var swapped=false;       /* 是否已換成整首 */
+  var headURL=null, fullURL=null;
 
-  function grab(i){
-    if(i<0 || i>=chunks.length) return null;
-    if(!jobs[i]) jobs[i]=yunFetchRaw(chunks[i]);
-    return jobs[i];
-  }
-  function prefetch(from){
-    for(var k=from; k<from+PREFETCH && k<chunks.length; k++){ var p=grab(k); if(p&&p.catch) p.catch(function(){}); }
-  }
-  function revoke(i){ try{ if(urls[i]){ URL.revokeObjectURL(urls[i]); delete urls[i]; } }catch(_){} }
-
+  function keep(u){ /* 收掉不再用的 objectURL */ }
   function attachSeek(){
     try{ var ms=navigator.mediaSession; if(!ms) return;
       ms.setActionHandler("seekforward", function(){ try{ a.currentTime=Math.min(a.duration||0, a.currentTime+15); }catch(_){}});
       ms.setActionHandler("seekbackward", function(){ try{ a.currentTime=Math.max(0, a.currentTime-15); }catch(_){}});
-      ms.setActionHandler("seekto", null);
+      try{ ms.setActionHandler("seekto", function(e){ try{ if(e.seekTime!=null) a.currentTime=e.seekTime; }catch(_){}}); }catch(_){}
     }catch(_){}
   }
 
-  function playFrom(i){
-    if(my!==spk.token) return;
-    if(i>=chunks.length){ maybeClearResumeOnComplete(); yunStop(); return; }
-    spk.idx=i+1; persistSpkResume();
-    prefetch(i);
-    grab(i).then(function(b){
+  /* 換成整首：只做一次，seek 到目前播到的位置無縫接續 */
+  function swapToFull(){
+    if(my!==spk.token || swapped || !full) return;
+    var at=0; try{ at=a.currentTime||0; }catch(_){}
+    swapped=true;
+    try{ fullURL=URL.createObjectURL(full); }catch(_){ swapped=false; return; }
+    a.onended=null; a.onerror=null; a.ontimeupdate=null; a.onloadedmetadata=null;
+    a.src=fullURL;
+    try{ if(headURL){ URL.revokeObjectURL(headURL); headURL=null; } }catch(_){}
+    a.onloadedmetadata=function(){
       if(my!==spk.token) return;
-      var u=URL.createObjectURL(new Blob([b],{type:"audio/mpeg"}));
-      urls[i]=u;
-      a.onended=null; a.onerror=null; a.ontimeupdate=null; a.onloadedmetadata=null;
-      a.src=u;
-      a.onended=function(){ if(my!==spk.token) return; revoke(i); playFrom(i+1); };
-      a.onerror=function(){ if(my!==spk.token) return; revoke(i); playFrom(i+1); };   /* 單段壞掉就跳過，不整個停 */
-      a.ontimeupdate=function(){ if(my===spk.token) spkPos(a); };
-      a.onloadedmetadata=function(){ if(my===spk.token) spkPos(a); };
-      var p=a.play(); if(p&&p.catch) p.catch(function(){ if(my===spk.token) yunStop(); });
-    }, function(){
-      if(my!==spk.token) return;
-      if(i===start){
-        /* 第一段就抓不到 → 明確提示 + 退回內建語音（絕不靜悄悄） */
-        spk.active=false;
-        if(typeof uiToast==="function") uiToast("云端语音连不上，改用装置内建声音（若没声音请再按一次朗读）");
-        spkToggleNative(spk.curText||"", spk.curId);
-      }else{
-        playFrom(i+1);   /* 中途某段抓不到就略過 */
-      }
-    });
+      try{ if(at>0 && isFinite(a.duration) && at<a.duration) a.currentTime=at; }catch(_){}
+      spkPos(a);
+    };
+    a.ontimeupdate=function(){ if(my===spk.token) spkPos(a); };
+    a.onended=function(){ if(my===spk.token){ maybeClearResumeOnComplete(); yunStop(); } };
+    a.onerror=function(){ if(my===spk.token) yunStop(); };
+    var p=a.play(); if(p&&p.catch) p.catch(function(){ /* 若鎖屏被擋，解鎖回前景時的 play() 會續上 */ });
   }
 
   attachSeek();
-  playFrom(start);
+
+  /* ① 第一段：秒開 */
+  Promise.resolve(yunFetchRaw(slice[0])).then(function(b0){
+    if(my!==spk.token) return;
+    try{ headURL=URL.createObjectURL(b0); }catch(_){ return; }
+    a.onended=null; a.onerror=null; a.ontimeupdate=null; a.onloadedmetadata=null;
+    a.src=headURL;
+    a.ontimeupdate=function(){ if(my===spk.token) spkPos(a); };
+    a.onloadedmetadata=function(){ if(my===spk.token) spkPos(a); };
+    a.onended=function(){
+      if(my!==spk.token) return;
+      if(full) swapToFull();          /* 整首已就緒 → 無縫換上 */
+      else waitFull=true;             /* 還沒好 → 等它好了立刻換 */
+    };
+    a.onerror=function(){ if(my!==spk.token) return; if(full) swapToFull(); };
+    if(slice.length===1){ full=b0; }  /* 只有一段：本身就是整首 */
+    var p=a.play(); if(p&&p.catch) p.catch(function(){ if(my===spk.token) yunStop(); });
+  }, function(){
+    if(my!==spk.token) return;
+    spk.active=false;
+    if(typeof uiToast==="function") uiToast("云端语音连不上，改用装置内建声音（若没声音请再按一次朗读）");
+    spkToggleNative(spk.curText||"", spk.curId);
+  });
+
+  /* ② 同時並行抓齊整課 → 串成單一 Blob */
+  var waitFull=false;
+  if(slice.length>1){
+    var res=new Array(slice.length), done=0, next=0, running=0, CONC=6, failed=false;
+    var pump=function(){
+      while(running<CONC && next<slice.length){
+        (function(i){ running++;
+          Promise.resolve(yunFetchRaw(slice[i])).then(function(b){ res[i]=b; }, function(){ failed=true; }).then(function(){
+            running--; done++;
+            if(my!==spk.token) return;
+            if(done>=slice.length){
+              if(!failed){
+                try{ full=new Blob(res,{type:"audio/mpeg"}); }catch(_){ return; }
+                if(waitFull || (a.ended)) swapToFull();   /* 第一段已播完在等 → 立刻換並續播 */
+              }
+              return;
+            }
+            pump();
+          });
+        })(next++);
+      }
+    };
+    pump();
+  }
 }
+
 
 window.spkSetBg=function(on){ state.bgPlay=!!on; try{ saveState(); }catch(_){}
   if(typeof uiToast==="function") uiToast(on?"已开启背景连续播放 · 锁屏也能一路听完":"已关闭，恢复逐句播放");
@@ -3374,7 +3405,7 @@ function renderSpkSheet(){
       +'<div class="spk-list">'+rows+'</div>'
       +'<div class="spk-rate"><span>语速</span><input type="range" min="0.6" max="1.3" step="0.02" value="'+rate+'" oninput="spkSetRate(this.value)"><span id="spk-rate-lbl">'+rate.toFixed(2)+'×</span></div>'+'<div class="spk-bg"><div class="spk-bg-l"><div class="spk-bg-t">背景连续播放</div><div class="spk-bg-d">把整课串成一首连续音档 · 锁屏、关萤幕、切到别的 App 都不中断</div></div><button class="spk-sw'+(state.bgPlay?' on':'')+'" role="switch" aria-checked="'+(state.bgPlay?'true':'false')+'" aria-label="背景连续播放" onclick="spkSetBg(!state.bgPlay)"><span class="spk-sw-dot"></span></button></div>'
       +((yunEnabled()&&state.lesson)?('<div class="spk-dl"><button class="spk-dl-btn" id="spk-preload-btn" onclick="spkPreloadLesson()">⬇ 预先下载这一课的语音</button><div class="spk-dl-sub">下载后，这一课的云帆语音可离线聆听，之后也不再耗用网路</div></div>'):"")
-      +'<div class="spk-ver">版本 v1.0.7</div>'
+      +'<div class="spk-ver">版本 v1.0.8</div>'
       +'<div class="spk-acts"><button class="spk-try" onclick="spkPreview()">▶︎ 试听</button><button class="spk-done" onclick="closeSpkSettings()">完成</button></div>'
       +(yun.ready?'':'<div class="spk-tip">想要更自然的真人男声「云帆」？请依「云帆语音设定指南」连接 Azure 语音服务。</div>')
     +'</div></div>';
