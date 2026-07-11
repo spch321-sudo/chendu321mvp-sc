@@ -947,7 +947,13 @@ function nl(s){return esc(s).replace(/\n/g,"<br>");}
 let state={view:"home",lesson:null,tab:"read",deep:{},checked:{},openUnit:null,bookUnit:null,bookMarks:{},read:{},last:null,font:0,streak:0,lastDate:null,best:0,notes:{},marks:{},reviewN:null,reviewUnit:null,s321:{},strategyId:null,xzPos:null,xzFavs:[],bgPlay:true,bgOn1:0,s920:[],s920Help:false,s920cf:{event:"",done:[]},s235:{comp:[],fam:[],team:[]},sys:[],tmk:{},tnote:{},spkResume:{},contPos:null,noteOpen:{},ttsVoice:"yunfan",voiceMig:0,voiceMig2:0};
 
 /* ---- 持久化（LINE/浏览器皆可；沙盒被挡时自动略过，不影响使用）---- */
-var LS_KEY="chendu321_v1";
+var LS_KEY="chendu321sc_v1";
+try{
+  if(!localStorage.getItem(LS_KEY)){
+    var _old=localStorage.getItem("chendu321_v1");
+    if(_old){ localStorage.setItem(LS_KEY, _old); }
+  }
+}catch(_){}
 function loadState(){
   try{
     var raw=localStorage.getItem(LS_KEY);
@@ -2961,12 +2967,12 @@ function yunGetAudio(){
   return yun.audio;
 }
 function yunUnlock(){
-  /* 必须在使用者点击的当下呼叫一次，iOS Safari 才会允许之后程式播放音讯 */
   if(yun.unlocked) return;
   try{
-    var a=yunGetAudio(); a.src=YUN_SILENT;
+    var a=yunGetAudio();
+    a.loop=false; a.src=YUN_SILENT;
     var p=a.play();
-    if(p && p.then){ p.then(function(){ yun.unlocked=true; }).catch(function(){}); }
+    if(p && p.then){ p.then(function(){ yun.unlocked=true; try{ a.pause(); }catch(_){} }).catch(function(){}); }
     else { yun.unlocked=true; }
   }catch(_){}
 }
@@ -3087,92 +3093,60 @@ function yunPlayJoined(text, id, startIdx){
   var my=++spk.token;
   if(typeof spkMediaSession==="function") spkMediaSession("play");
   if(typeof updateSpeakButtons==="function") updateSpeakButtons();
-  if(typeof uiToast==="function") uiToast("开始朗读…");
+  if(typeof uiToast==="function") uiToast("整堂串成一首，准备中… ");
   persistSpkResume();
 
   var a=yunGetAudio();
-  var full=null;           /* 整首 Blob */
-  var swapped=false;       /* 是否已換成整首 */
-  var headURL=null, fullURL=null;
+  var res=new Array(slice.length), done=0, next=0, running=0, CONC=8, failed=false, lastPct=-1;
 
-  function keep(u){ /* 收掉不再用的 objectURL */ }
-  function attachSeek(){
-    try{ var ms=navigator.mediaSession; if(!ms) return;
-      ms.setActionHandler("seekforward", function(){ try{ a.currentTime=Math.min(a.duration||0, a.currentTime+15); }catch(_){}});
-      ms.setActionHandler("seekbackward", function(){ try{ a.currentTime=Math.max(0, a.currentTime-15); }catch(_){}});
-      try{ ms.setActionHandler("seekto", function(e){ try{ if(e.seekTime!=null) a.currentTime=e.seekTime; }catch(_){}}); }catch(_){}
-    }catch(_){}
-  }
-
-  /* 換成整首：只做一次，seek 到目前播到的位置無縫接續 */
-  function swapToFull(){
-    if(my!==spk.token || swapped || !full) return;
-    var at=0; try{ at=a.currentTime||0; }catch(_){}
-    swapped=true;
-    try{ fullURL=URL.createObjectURL(full); }catch(_){ swapped=false; return; }
+  function play(){
+    if(my!==spk.token) return;
+    var url;
+    try{ url=URL.createObjectURL(new Blob(res,{type:"audio/mpeg"})); }catch(_){ yunStop(); return; }
+    try{ if(spk.joinedURL) URL.revokeObjectURL(spk.joinedURL); }catch(_){}
+    spk.joinedURL=url;
     a.onended=null; a.onerror=null; a.ontimeupdate=null; a.onloadedmetadata=null;
-    a.src=fullURL;
-    try{ if(headURL){ URL.revokeObjectURL(headURL); headURL=null; } }catch(_){}
-    a.onloadedmetadata=function(){
-      if(my!==spk.token) return;
-      try{ if(at>0 && isFinite(a.duration) && at<a.duration) a.currentTime=at; }catch(_){}
-      spkPos(a);
-    };
+    a.loop=false; a.src=url;
+    a.onloadedmetadata=function(){ if(my===spk.token) spkPos(a); };
     a.ontimeupdate=function(){ if(my===spk.token) spkPos(a); };
     a.onended=function(){ if(my===spk.token){ maybeClearResumeOnComplete(); yunStop(); } };
     a.onerror=function(){ if(my===spk.token) yunStop(); };
-    var p=a.play(); if(p&&p.catch) p.catch(function(){ /* 若鎖屏被擋，解鎖回前景時的 play() 會續上 */ });
-  }
-
-  attachSeek();
-
-  /* ① 第一段：秒開 */
-  Promise.resolve(yunFetchRaw(slice[0])).then(function(b0){
-    if(my!==spk.token) return;
-    try{ headURL=URL.createObjectURL(b0); }catch(_){ return; }
-    a.onended=null; a.onerror=null; a.ontimeupdate=null; a.onloadedmetadata=null;
-    a.src=headURL;
-    a.ontimeupdate=function(){ if(my===spk.token) spkPos(a); };
-    a.onloadedmetadata=function(){ if(my===spk.token) spkPos(a); };
-    a.onended=function(){
-      if(my!==spk.token) return;
-      if(full) swapToFull();          /* 整首已就緒 → 無縫換上 */
-      else waitFull=true;             /* 還沒好 → 等它好了立刻換 */
-    };
-    a.onerror=function(){ if(my!==spk.token) return; if(full) swapToFull(); };
-    if(slice.length===1){ full=b0; }  /* 只有一段：本身就是整首 */
+    try{ var ms=navigator.mediaSession; if(ms){
+      ms.setActionHandler("seekforward", function(){ try{ a.currentTime=Math.min(a.duration||0, a.currentTime+15); }catch(_){}});
+      ms.setActionHandler("seekbackward", function(){ try{ a.currentTime=Math.max(0, a.currentTime-15); }catch(_){}});
+      try{ ms.setActionHandler("seekto", function(e){ try{ if(e.seekTime!=null) a.currentTime=e.seekTime; }catch(_){}}); }catch(_){}
+    }}catch(_){}
+    if(typeof uiToast==="function") uiToast("开始朗读，锁屏也能一路听完");
     var p=a.play(); if(p&&p.catch) p.catch(function(){ if(my===spk.token) yunStop(); });
-  }, function(){
-    if(my!==spk.token) return;
-    spk.active=false;
-    if(typeof uiToast==="function") uiToast("云端语音连不上，改用装置内建声音（若没声音请再按一次朗读）");
-    spkToggleNative(spk.curText||"", spk.curId);
-  });
-
-  /* ② 同時並行抓齊整課 → 串成單一 Blob */
-  var waitFull=false;
-  if(slice.length>1){
-    var res=new Array(slice.length), done=0, next=0, running=0, CONC=6, failed=false;
-    var pump=function(){
-      while(running<CONC && next<slice.length){
-        (function(i){ running++;
-          Promise.resolve(yunFetchRaw(slice[i])).then(function(b){ res[i]=b; }, function(){ failed=true; }).then(function(){
-            running--; done++;
-            if(my!==spk.token) return;
-            if(done>=slice.length){
-              if(!failed){
-                try{ full=new Blob(res,{type:"audio/mpeg"}); }catch(_){ return; }
-                if(waitFull || (a.ended)) swapToFull();   /* 第一段已播完在等 → 立刻換並續播 */
-              }
-              return;
-            }
-            pump();
-          });
-        })(next++);
-      }
-    };
-    pump();
   }
+  function tick(){
+    done++;
+    var pct=Math.floor(done/slice.length*100);
+    if(pct!==lastPct && pct<100 && done>1){ lastPct=pct;
+      if(typeof uiToast==="function" && (pct%20===0)) uiToast("整堂串成一首，准备中… "+pct+"%"); }
+  }
+  function pump(){
+    while(running<CONC && next<slice.length){
+      (function(i){ running++;
+        Promise.resolve(yunFetchRaw(slice[i])).then(function(b){ res[i]=b; }, function(){ failed=true; }).then(function(){
+          running--; tick();
+          if(my!==spk.token) return;
+          if(done>=slice.length){
+            if(failed || res.filter(Boolean).length!==slice.length){
+              spk.active=false;
+              if(typeof uiToast==="function") uiToast("云端语音连不上，改用装置内建声音（若没声音请再按一次朗读）");
+              spkToggleNative(spk.curText||"", spk.curId);
+            }else{
+              play();
+            }
+            return;
+          }
+          pump();
+        });
+      })(next++);
+    }
+  }
+  pump();
 }
 
 
@@ -3405,7 +3379,7 @@ function renderSpkSheet(){
       +'<div class="spk-list">'+rows+'</div>'
       +'<div class="spk-rate"><span>语速</span><input type="range" min="0.6" max="1.3" step="0.02" value="'+rate+'" oninput="spkSetRate(this.value)"><span id="spk-rate-lbl">'+rate.toFixed(2)+'×</span></div>'+'<div class="spk-bg"><div class="spk-bg-l"><div class="spk-bg-t">背景连续播放</div><div class="spk-bg-d">把整课串成一首连续音档 · 锁屏、关萤幕、切到别的 App 都不中断</div></div><button class="spk-sw'+(state.bgPlay?' on':'')+'" role="switch" aria-checked="'+(state.bgPlay?'true':'false')+'" aria-label="背景连续播放" onclick="spkSetBg(!state.bgPlay)"><span class="spk-sw-dot"></span></button></div>'
       +((yunEnabled()&&state.lesson)?('<div class="spk-dl"><button class="spk-dl-btn" id="spk-preload-btn" onclick="spkPreloadLesson()">⬇ 预先下载这一课的语音</button><div class="spk-dl-sub">下载后，这一课的云帆语音可离线聆听，之后也不再耗用网路</div></div>'):"")
-      +'<div class="spk-ver">版本 v1.0.8</div>'
+      +'<div class="spk-ver">版本 v1.1.0</div>'
       +'<div class="spk-acts"><button class="spk-try" onclick="spkPreview()">▶︎ 试听</button><button class="spk-done" onclick="closeSpkSettings()">完成</button></div>'
       +(yun.ready?'':'<div class="spk-tip">想要更自然的真人男声「云帆」？请依「云帆语音设定指南」连接 Azure 语音服务。</div>')
     +'</div></div>';
