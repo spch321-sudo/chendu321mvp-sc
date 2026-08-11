@@ -2153,8 +2153,11 @@ function toolNoteBlockHTML(id){
   h+='<div class="tnk-truths">';
   truths.forEach(function(t,i){
     var key="t"+i; var has=Object.prototype.hasOwnProperty.call(mk,key); var note=has?String((mk[key]&&mk[key].n)||""):"";
-    h+='<div class="tnk-line'+(has?" on":"")+'" onclick="tmkTap(&#39;'+id+'&#39;,&#39;'+key+'&#39;)">'+esc(t)+(has&&note?'<span class="tnk-flag">📝</span>':'')+'</div>';
-    if(has&&note) h+='<div class="tnk-note"><b>领受：</b>'+esc(note)+'</div>';
+    var nk="tool-"+id+"-"+key; var nopen=!!(state.noteOpen&&state.noteOpen[nk]);
+    h+='<div class="tnk-item">';
+    h+='<div class="tnk-line'+(has?" on":"")+'" onclick="tmkTap(&#39;'+id+'&#39;,&#39;'+key+'&#39;)">'+esc(t)+(has&&note?'<span class="mk-flag'+(nopen?' on':'')+'" id="mkflag-'+nk+'" onclick="event.stopPropagation();toggleNote(&#39;'+nk+'&#39;)" role="button" aria-label="领受笔记" aria-expanded="'+(nopen?'true':'false')+'">'+(nopen?'▼':'▶')+'</span>':'')+'</div>';
+    if(has&&note) h+='<div class="mk-note'+(nopen?' open':'')+'" id="mknote-'+nk+'"><div class="mk-note-in"><b>领受：</b>'+esc(note).split("\n").join("<br>")+'</div></div>';
+    h+='</div>';
   });
   h+='</div>';
   var nv=(state.tnote&&state.tnote[id])||"";
