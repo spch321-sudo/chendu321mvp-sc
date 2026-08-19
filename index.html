@@ -660,6 +660,8 @@
   .rec-btn.ghost2{background:var(--mintSoft);color:var(--mintDeep);border:1.5px solid var(--mint);}
   .mt-sign{width:100%;box-sizing:border-box;border:1.5px solid var(--line);border-radius:12px;padding:11px 13px;font-size:15px;font-family:inherit;color:var(--ink);background:var(--card);margin:2px 0 6px;}
   .mt-sign:focus{outline:none;border-color:var(--mint);}
+  .bless-live{margin:12px 0 6px;text-align:center;}
+  .bless-live-cv{width:100%;max-width:250px;border-radius:14px;box-shadow:0 4px 16px rgba(0,0,0,.18);display:block;margin:0 auto;}
   /* ===== 建国四方略 ===== */
   .strat-wrap{margin:2px 0 16px;}
   .strat-h{font-size:13px;font-weight:700;color:var(--mintDark);margin:0 2px 9px;letter-spacing:.3px;}
@@ -4137,12 +4139,7 @@ function mtDraw(l, ti, type, shape){
     ctx.fillStyle=T.tagline; ctx.font='500 21px '+MT_FONT; ctx.textAlign="center"; ctx.fillText("扫码一起晨读",W-qs/2-78,H-100);
   }
   // 课别 + 标题
-  var flat=(l.title||"").split("\n").join("‧");
-  ctx.fillStyle=T.title; ctx.font='600 '+(sq?28:34)+'px '+MT_FONT;
-  var _tMaxW=_hasStk?Math.max(220,_stkLeft-_leftPad-28):(W-260);
-  var tl=mtWrap(ctx,"第 "+l.n+" 课 · "+flat,_tMaxW);
-  var ty=ornY+(sq?46:58);
-  if(_hasStk){ ctx.textAlign="left"; for(var j=0;j<Math.min(tl.length,2);j++) ctx.fillText(tl[j],_leftPad,ty+j*(sq?38:46)); ctx.textAlign="center"; } else { for(var j=0;j<Math.min(tl.length,2);j++) ctx.fillText(tl[j],cx,ty+j*(sq?38:46)); }
+  // 课别行已隐藏
   // 装饰
   ctx.fillStyle=T.orn; ctx.font='400 '+(sq?26:30)+'px '+MT_FONT; if(_hasStk){ ctx.textAlign="left"; ctx.fillText("✦",_leftPad,ornY); ctx.textAlign="center"; } else { ctx.fillText("✦",cx,ornY); }
   // === 主内容群组（置中于 header 与 ornament 之间）===
@@ -4507,6 +4504,7 @@ window.blessStart=function(n){
             blessShow(n,blob);
           };
           mr.start(); blessTimerStart(); blessShowRecording(n);
+          try{ var _host=document.getElementById("bless-slot"); if(_host){ var _lv=document.getElementById("bless-live"); if(!_lv){ _lv=document.createElement("div"); _lv.id="bless-live"; _lv.className="bless-live"; var _bar=_host.querySelector(".rec-recbar"); if(_bar&&_bar.parentNode){ _bar.parentNode.insertBefore(_lv,_bar.nextSibling); } else { _host.appendChild(_lv); } } cv.className="bless-live-cv"; _lv.innerHTML=""; _lv.appendChild(cv); } }catch(e){}
         }).catch(function(err){ blessStopTracks(); blessStopSelfie(); blessShowError(n,err); });
       }catch(e){ blessStopTracks(); blessStopSelfie(); blessShowError(n,e); }
     };
