@@ -3429,12 +3429,20 @@ function flwShow(it){
   /* 换分页、展开「想更深」——这两件事跟「自动滚动」是两回事：
      念到的句子若躲在别的分页或收起来的区块里，本来就得先让它露出来。
      所以就算你把跟读关掉，收合的段落照样会为你打开。 */
-  if(state.spkFollow!==0 && it.tab && state.tab!==it.tab){
+  /* 换分页：念到别的栏项（对焦／盼望／静默／操练／宣告／分享）就自动切过去。
+     这跟「想更深」一样，是让那一句露出来的必要动作，与自动滚动是两回事——
+     不切过去的话，整课有一半的内容根本无从标示起。 */
+  if(it.tab && state.tab!==it.tab){
     state.tab=it.tab;
     try{ if(typeof recCleanup==="function") recCleanup(); }catch(_){}
     try{ render(); }catch(_){}
   }
   if(it.deep && !state.deep[it.deep]){ try{ toggleDeep(it.deep); }catch(_){} }
+  /* 万一那一句还是没出现（重绘被打断、DOM 还没换好），补一次重绘再试 */
+  if(!document.querySelector('.mk-s[data-mk="'+it.key+'"]')){
+    try{ render(); }catch(_){}
+    if(it.deep && !state.deep[it.deep]){ try{ toggleDeep(it.deep); }catch(_){} }
+  }
   flwPaint();
   if(state.spkFollow===0) return;
   if(Date.now() < FLW.hold) return;
