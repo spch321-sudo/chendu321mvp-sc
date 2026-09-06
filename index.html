@@ -950,7 +950,7 @@ function inline(text){
 function nl(s){return esc(s).replace(/\n/g,"<br>");}
 
 /* ============ STATE ============ */
-let state={view:"home",lesson:null,tab:"read",deep:{},checked:{},openUnit:null,bookUnit:null,bookMarks:{},read:{},last:null,font:0,streak:0,lastDate:null,best:0,notes:{},marks:{},reviewN:null,reviewUnit:null,s321:{},strategyId:null,xzPos:null,xzFavs:[],bgPlay:true,bgOn1:0,s920:[],s920Help:false,s920cf:{event:"",done:[]},s235:{comp:[],fam:[],team:[]},sys:[],tmk:{},tnote:{},spkResume:{},contPos:null,noteOpen:{},spkFollow:1,ttsVoice:"yunfan",voiceMig:0,voiceMig2:0};
+let state={view:"home",lesson:null,tab:"read",deep:{},checked:{},openUnit:null,bookUnit:null,bookMarks:{},read:{},last:null,font:0,streak:0,lastDate:null,best:0,notes:{},marks:{},reviewN:null,reviewUnit:null,s321:{},strategyId:null,xzPos:null,xzFavs:[],bgPlay:true,bgOn1:0,s920:[],s920Help:false,s920cf:{event:"",done:[]},s235:{comp:[],fam:[],team:[]},sys:[],tmk:{},tnote:{},spkResume:{},contPos:null,noteOpen:{},spkFollow:1,spkFollowMig:0,ttsVoice:"yunfan",voiceMig:0,voiceMig2:0};
 
 /* ---- 持久化（LINE/浏览器皆可；沙盒被挡时自动略过，不影响使用）---- */
 var LS_KEY="chendu321sc_v1";
@@ -990,6 +990,8 @@ function loadState(){
     if(typeof d.spkVoice==="string") state.spkVoice=d.spkVoice;
     if(typeof d.spkRate==="number") state.spkRate=d.spkRate;
     if(typeof d.spkFollow==="number") state.spkFollow=d.spkFollow;
+    /* 升级后把跟读打开一次（沿用本 App 既有的一次性迁移写法） */
+    if(!d.spkFollowMig){ state.spkFollow=1; state.spkFollowMig=1; } else state.spkFollowMig=d.spkFollowMig;
     if(!d.rateMig){ if(typeof state.spkRate!=="number"||state.spkRate===0.94) state.spkRate=1.0; state.rateMig=1; } else state.rateMig=d.rateMig;
     if(typeof d.ttsEngine==="string") state.ttsEngine=d.ttsEngine;
     if(typeof d.ttsVoice==="string") state.ttsVoice=d.ttsVoice;
@@ -1004,7 +1006,7 @@ function saveState(){
     localStorage.setItem(LS_KEY,JSON.stringify({
       checked:state.checked, read:state.read, last:state.last,
       openUnit:state.openUnit, contPos:state.contPos, font:state.font,
-      streak:state.streak, lastDate:state.lastDate, best:state.best, notes:state.notes, marks:state.marks, bookMarks:state.bookMarks, xzFavs:state.xzFavs, bgPlay:state.bgPlay, bgOn1:state.bgOn1, s321:state.s321, xzPos:state.xzPos, s920:state.s920, s920Help:state.s920Help, s920cf:state.s920cf, s235:state.s235, sys:state.sys, tmk:state.tmk, tnote:state.tnote, spkResume:state.spkResume, spkFollow:state.spkFollow, spkVoice:state.spkVoice, spkRate:state.spkRate, ttsEngine:state.ttsEngine, ttsVoice:state.ttsVoice, voiceMig:state.voiceMig, rateMig:state.rateMig, voiceMig2:state.voiceMig2
+      streak:state.streak, lastDate:state.lastDate, best:state.best, notes:state.notes, marks:state.marks, bookMarks:state.bookMarks, xzFavs:state.xzFavs, bgPlay:state.bgPlay, bgOn1:state.bgOn1, s321:state.s321, xzPos:state.xzPos, s920:state.s920, s920Help:state.s920Help, s920cf:state.s920cf, s235:state.s235, sys:state.sys, tmk:state.tmk, tnote:state.tnote, spkResume:state.spkResume, spkFollow:state.spkFollow, spkFollowMig:state.spkFollowMig, spkVoice:state.spkVoice, spkRate:state.spkRate, ttsEngine:state.ttsEngine, ttsVoice:state.ttsVoice, voiceMig:state.voiceMig, rateMig:state.rateMig, voiceMig2:state.voiceMig2
     }));
   }catch(e){}
 }
@@ -3423,21 +3425,52 @@ function flwShow(it){
   var okView = (FLW.kind==="book")
     ? (state.view==="bookunit" && state.bookUnit===FLW.n)
     : (state.view==="reader" && state.lesson && state.lesson.n===FLW.n);
-  if(!okView) return;                                   // 不在这一页就不动画面
-  var follow = (state.spkFollow!==0);
-  if(follow && it.tab && state.tab!==it.tab){
+  if(!okView) return;
+  /* 换分页、展开「想更深」——这两件事跟「自动滚动」是两回事：
+     念到的句子若躲在别的分页或收起来的区块里，本来就得先让它露出来。
+     所以就算你把跟读关掉，收合的段落照样会为你打开。 */
+  if(state.spkFollow!==0 && it.tab && state.tab!==it.tab){
     state.tab=it.tab;
     try{ if(typeof recCleanup==="function") recCleanup(); }catch(_){}
     try{ render(); }catch(_){}
   }
-  if(follow && it.deep && !state.deep[it.deep]){ try{ toggleDeep(it.deep); }catch(_){} }
+  if(it.deep && !state.deep[it.deep]){ try{ toggleDeep(it.deep); }catch(_){} }
   flwPaint();
-  if(!follow) return;
-  if(Date.now() < FLW.hold) return;                     // 使用者刚刚自己捲过，先别抢
-  var el=document.querySelector('.mk-s[data-mk="'+it.key+'"]');
+  if(state.spkFollow===0) return;
+  if(Date.now() < FLW.hold) return;
+  flwScrollTo(it.key);
+}
+/* 滚到那一句：自己算位置再滚，不倚赖 scrollIntoView 的选项
+   （iOS 主画面 App 与 LINE 内建浏览器对它的支援很不一致）。
+   滚完再验一次：没真的到位就直接跳过去，宁可硬一点也不要不动。 */
+function flwScrollTo(key){
+  var el=document.querySelector('.mk-s[data-mk="'+key+'"]');
   if(!el) return;
-  try{ el.scrollIntoView({behavior:"smooth", block:"center"}); }
-  catch(_){ try{ el.scrollIntoView(); }catch(__){} }
+  var vh=function(){ return window.innerHeight||document.documentElement.clientHeight||0; };
+  var ytop=function(){ return window.pageYOffset||document.documentElement.scrollTop||document.body.scrollTop||0; };
+  var target=function(e){
+    var r=e.getBoundingClientRect(), h=vh();
+    var y=ytop()+r.top-(h/2)+(r.height/2);
+    var max=Math.max(0,(document.documentElement.scrollHeight||0)-h);
+    return Math.max(0, Math.min(max, Math.round(y)));
+  };
+  var smooth=false;
+  try{ smooth=("scrollBehavior" in document.documentElement.style); }catch(_){}
+  FLW.auto=Date.now()+1400;                       /* 这段时间内的位移是我们自己滚的，不算使用者插手 */
+  var y=target(el);
+  if(smooth){ try{ window.scrollTo({top:y, behavior:"smooth"}); }catch(_){ try{ window.scrollTo(0,y); }catch(__){} } }
+  else { try{ window.scrollTo(0,y); }catch(_){} }
+  try{ clearTimeout(FLW.vT); }catch(_){}
+  FLW.vT=setTimeout(function(){
+    try{
+      if(!spk.active || FLW.key!==key) return;
+      var e2=document.querySelector('.mk-s[data-mk="'+key+'"]'); if(!e2) return;
+      var r=e2.getBoundingClientRect(), h=vh();
+      if(r.top>=h*0.12 && r.bottom<=h*0.92) return;  /* 已经在画面上，不用再动 */
+      FLW.auto=Date.now()+900;
+      window.scrollTo(0, target(e2));
+    }catch(_){}
+  }, 430);
 }
 function flwPaint(){
   try{
@@ -3473,13 +3506,28 @@ function flwJoinedTick(a){
   if(gi!==FLW.lastIdx){ FLW.lastIdx=gi; spk.idx=gi; try{ persistSpkResume(); }catch(_){} }
 }
 /* 使用者自己动手捲动时，先让画面归他，六秒后再接手 */
+/* 使用者自己动手滚动时，先让画面归他，五秒后再接手。
+   判断看的是「滚动位置真的变了，而且不是我们自己滚的」——
+   点一下句子、按暂停都不算，才不会碰一下萤幕跟读就停摆。 */
 (function(){
-  var hold=function(){ try{ if(spk && spk.active) FLW.hold=Date.now()+6000; }catch(_){} };
-  ["wheel","touchstart","touchmove","pointerdown"].forEach(function(ev){
-    try{ window.addEventListener(ev, hold, {passive:true}); }catch(_){ try{ window.addEventListener(ev, hold); }catch(__){} }
+  var last=-1;
+  var onScroll=function(){
+    try{
+      var y=window.pageYOffset||document.documentElement.scrollTop||document.body.scrollTop||0;
+      if(last<0){ last=y; return; }
+      var d=Math.abs(y-last); last=y;
+      if(!spk || !spk.active) return;
+      if(Date.now() < (FLW.auto||0)) return;
+      if(d>=24) FLW.hold=Date.now()+5000;
+    }catch(_){}
+  };
+  try{ window.addEventListener("scroll", onScroll, {passive:true}); }catch(_){ try{ window.addEventListener("scroll", onScroll); }catch(__){} }
+  var hard=function(){ try{ if(spk && spk.active) FLW.hold=Date.now()+5000; }catch(_){} };
+  ["wheel","touchmove"].forEach(function(ev){
+    try{ window.addEventListener(ev, hard, {passive:true}); }catch(_){ try{ window.addEventListener(ev, hard); }catch(__){} }
   });
   try{ window.addEventListener("keydown", function(e){
-    if(/^(Arrow|Page)|^(Home|End|Space| )$/.test((e&&e.key)||"")) hold();
+    if(/^(Arrow|Page)|^(Home|End|Space| )$/.test((e&&e.key)||"")) hard();
   }); }catch(_){}
 })();
 window.spkFollowPaint=flwPaint;
